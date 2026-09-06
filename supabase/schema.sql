@@ -1,0 +1,381 @@
+-- ==============================================================================
+-- CAMPUSSPHERE — POSTGRESQL DATABASE SCHEMA & SEED DATA (SUPABASE)
+-- ==============================================================================
+
+-- Enable UUID extension
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- 1. PROFILES (Extends Supabase auth.users or standalone RBAC)
+CREATE TABLE IF NOT EXISTS public.profiles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE NOT NULL,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('STUDENT', 'FACULTY', 'HOD', 'ADMIN', 'PLACEMENT_OFFICER', 'CLUB_COORDINATOR', 'MENTOR', 'ALUMNI', 'EMPLOYER_VERIFIER')),
+    phone_number TEXT,
+    avatar_url TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. DEPARTMENTS
+CREATE TABLE IF NOT EXISTS public.departments (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    code TEXT UNIQUE NOT NULL,
+    description TEXT,
+    head_of_department_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. STUDENTS
+CREATE TABLE IF NOT EXISTS public.students (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID UNIQUE NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    student_id TEXT UNIQUE NOT NULL,
+    department_id BIGINT REFERENCES public.departments(id) ON DELETE SET NULL,
+    year INT DEFAULT 1,
+    semester INT DEFAULT 1,
+    division TEXT DEFAULT 'A',
+    course TEXT DEFAULT 'B.Tech in Computer Science',
+    cgpa NUMERIC(4,2) DEFAULT 8.0,
+    points INT DEFAULT 100,
+    engagement_score INT DEFAULT 75,
+    placement_readiness_score INT DEFAULT 80,
+    events_attended_count INT DEFAULT 0,
+    bio TEXT,
+    github_url TEXT,
+    linkedin_url TEXT,
+    portfolio_url TEXT,
+    portfolio_slug TEXT UNIQUE,
+    is_portfolio_public BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4. FACULTY
+CREATE TABLE IF NOT EXISTS public.faculty (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID UNIQUE NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    faculty_id TEXT UNIQUE NOT NULL,
+    department_id BIGINT REFERENCES public.departments(id) ON DELETE SET NULL,
+    designation TEXT NOT NULL,
+    specialization TEXT,
+    office_location TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. EVENTS
+CREATE TABLE IF NOT EXISTS public.events (
+    id BIGSERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    category TEXT NOT NULL CHECK (category IN ('Technical Workshop', 'Hackathon', 'Guest Lecture', 'Cultural Event', 'Sports Competition', 'Seminar', 'Career Fair', 'Webinar')),
+    department_id BIGINT REFERENCES public.departments(id) ON DELETE SET NULL,
+    organizer_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    venue TEXT NOT NULL,
+    start_date TIMESTAMPTZ NOT NULL,
+    end_date TIMESTAMPTZ NOT NULL,
+    registration_deadline TIMESTAMPTZ NOT NULL,
+    max_participants INT DEFAULT 100,
+    registered_count INT DEFAULT 0,
+    contact_person TEXT,
+    contact_email TEXT,
+    banner_url TEXT,
+    points_reward INT DEFAULT 30,
+    status TEXT DEFAULT 'PUBLISHED' CHECK (status IN ('DRAFT', 'PUBLISHED', 'ONGOING', 'COMPLETED', 'CANCELLED')),
+    qr_active_token TEXT,
+    qr_expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 6. EVENT REGISTRATIONS
+CREATE TABLE IF NOT EXISTS public.event_registrations (
+    id BIGSERIAL PRIMARY KEY,
+    event_id BIGINT NOT NULL REFERENCES public.events(id) ON DELETE CASCADE,
+    student_id BIGINT NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    status TEXT DEFAULT 'REGISTERED' CHECK (status IN ('REGISTERED', 'ATTENDED', 'CANCELLED', 'WAITLISTED')),
+    registered_at TIMESTAMPTZ DEFAULT NOW(),
+    attended_at TIMESTAMPTZ,
+    UNIQUE(event_id, student_id)
+);
+
+-- 7. ATTENDANCE RECORDS (Dynamic QR Scan Logs)
+CREATE TABLE IF NOT EXISTS public.attendance_records (
+    id BIGSERIAL PRIMARY KEY,
+    event_id BIGINT NOT NULL REFERENCES public.events(id) ON DELETE CASCADE,
+    student_id BIGINT NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    verification_method TEXT DEFAULT 'QR_SCAN' CHECK (verification_method IN ('QR_SCAN', 'MANUAL_FACULTY', 'BIOMETRIC', 'RFID')),
+    marked_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(event_id, student_id)
+);
+
+-- 8. CERTIFICATES VAULT
+CREATE TABLE IF NOT EXISTS public.certificates (
+    id BIGSERIAL PRIMARY KEY,
+    certificate_uid TEXT UNIQUE NOT NULL DEFAULT ('CERT-' || upper(substr(md5(random()::text), 1, 12))),
+    student_id BIGINT NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    category TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    issue_date DATE NOT NULL,
+    file_url TEXT,
+    file_size INT,
+    status TEXT DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
+    rejection_reason TEXT,
+    verified_by_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    verified_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 9. SKILLS
+CREATE TABLE IF NOT EXISTS public.skills (
+    id BIGSERIAL PRIMARY KEY,
+    student_id BIGINT NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL,
+    proficiency TEXT DEFAULT 'INTERMEDIATE' CHECK (proficiency IN ('BEGINNER', 'INTERMEDIATE', 'ADVANCED', 'EXPERT')),
+    is_verified BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(student_id, name)
+);
+
+-- 10. PROJECTS
+CREATE TABLE IF NOT EXISTS public.projects (
+    id BIGSERIAL PRIMARY KEY,
+    student_id BIGINT NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    technologies TEXT NOT NULL,
+    team_members TEXT,
+    github_link TEXT,
+    demo_link TEXT,
+    faculty_mentor TEXT,
+    status TEXT DEFAULT 'Development' CHECK (status IN ('Idea', 'Planning', 'Development', 'Testing', 'Completed')),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 11. ACHIEVEMENTS
+CREATE TABLE IF NOT EXISTS public.achievements (
+    id BIGSERIAL PRIMARY KEY,
+    student_id BIGINT NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT,
+    date_achieved DATE NOT NULL,
+    badge_title TEXT,
+    icon_name TEXT DEFAULT 'Award',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 12. COMPANIES & CAREER OPPORTUNITIES
+CREATE TABLE IF NOT EXISTS public.companies (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    logo_url TEXT,
+    website TEXT,
+    location TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.job_postings (
+    id BIGSERIAL PRIMARY KEY,
+    company_id BIGINT REFERENCES public.companies(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    job_type TEXT DEFAULT 'INTERNSHIP' CHECK (job_type IN ('INTERNSHIP', 'FULL_TIME')),
+    stipend_salary TEXT NOT NULL,
+    location TEXT NOT NULL,
+    description TEXT NOT NULL,
+    requirements TEXT,
+    required_skills TEXT,
+    deadline TIMESTAMPTZ NOT NULL,
+    min_cgpa NUMERIC(3,1) DEFAULT 7.5,
+    openings INT DEFAULT 5,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.job_applications (
+    id BIGSERIAL PRIMARY KEY,
+    job_id BIGINT NOT NULL REFERENCES public.job_postings(id) ON DELETE CASCADE,
+    student_id BIGINT NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    resume_url TEXT,
+    status TEXT DEFAULT 'APPLIED' CHECK (status IN ('APPLIED', 'SHORTLISTED', 'INTERVIEW', 'SELECTED', 'REJECTED')),
+    applied_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(job_id, student_id)
+);
+
+-- 13. CLUBS & SOCIETIES
+CREATE TABLE IF NOT EXISTS public.clubs (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    code TEXT UNIQUE NOT NULL,
+    description TEXT NOT NULL,
+    department_id BIGINT REFERENCES public.departments(id) ON DELETE SET NULL,
+    coordinator_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    logo_url TEXT,
+    members_count INT DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.club_members (
+    id BIGSERIAL PRIMARY KEY,
+    club_id BIGINT NOT NULL REFERENCES public.clubs(id) ON DELETE CASCADE,
+    student_id BIGINT NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+    is_approved BOOLEAN DEFAULT TRUE,
+    joined_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(club_id, student_id)
+);
+
+-- 14. ANNOUNCEMENTS & NOTIFICATIONS
+CREATE TABLE IF NOT EXISTS public.announcements (
+    id BIGSERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    category TEXT NOT NULL,
+    priority TEXT DEFAULT 'NORMAL' CHECK (priority IN ('NORMAL', 'IMPORTANT', 'URGENT')),
+    author_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    department_id BIGINT REFERENCES public.departments(id) ON DELETE SET NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id BIGSERIAL PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    notification_type TEXT DEFAULT 'SYSTEM',
+    is_read BOOLEAN DEFAULT FALSE,
+    action_url TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ==============================================================================
+-- ROW LEVEL SECURITY (RLS) POLICIES
+-- ==============================================================================
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.students ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.certificates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.events ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Public profiles are viewable by everyone" ON public.profiles FOR SELECT USING (true);
+CREATE POLICY "Public certificates verify access" ON public.certificates FOR SELECT USING (true);
+CREATE POLICY "Public events are viewable by everyone" ON public.events FOR SELECT USING (true);
+CREATE POLICY "Public student portfolios viewable" ON public.students FOR SELECT USING (is_portfolio_public = true);
+
+-- ==============================================================================
+-- REALISTIC SEED DATA
+-- ==============================================================================
+
+-- 1. Insert Profiles
+INSERT INTO public.profiles (id, email, username, first_name, last_name, role, phone_number)
+VALUES 
+    ('11111111-1111-1111-1111-111111111111', 'student@campus.edu', 'aarav_student', 'Aarav', 'Sharma', 'STUDENT', '+91 98765 43210'),
+    ('22222222-2222-2222-2222-222222222222', 'faculty@campus.edu', 'prof_sharma', 'Dr. Rajesh', 'Sharma', 'FACULTY', '+91 98765 43211'),
+    ('33333333-3333-3333-3333-333333333333', 'hod@campus.edu', 'hod_cse', 'Dr. Ananya', 'Iyer', 'HOD', '+91 98765 43212'),
+    ('44444444-4444-4444-4444-444444444444', 'admin@campus.edu', 'admin', 'System', 'Administrator', 'ADMIN', '+91 98765 43213'),
+    ('55555555-5555-5555-5555-555555555555', 'placement@campus.edu', 'placement_officer', 'Priya', 'Mehta', 'PLACEMENT_OFFICER', '+91 98765 43214'),
+    ('66666666-6666-6666-6666-666666666666', 'club@campus.edu', 'club_lead', 'Rohan', 'Verma', 'CLUB_COORDINATOR', '+91 98765 43215'),
+    ('77777777-7777-7777-7777-777777777777', 'verifier@campus.edu', 'verifier_org', 'Acme India', 'Verifier', 'EMPLOYER_VERIFIER', '+91 98765 43216')
+ON CONFLICT (id) DO NOTHING;
+
+-- 2. Insert Departments
+INSERT INTO public.departments (id, name, code, description, head_of_department_id)
+VALUES 
+    (1, 'Computer Science & Engineering', 'CSE', 'Core Computer Science, AI, and Software Systems', '33333333-3333-3333-3333-333333333333'),
+    (2, 'Information Technology', 'IT', 'Information systems, cloud architecture, and networking', NULL),
+    (3, 'Artificial Intelligence & Data Science', 'AI&DS', 'Machine learning algorithms, deep learning, and big data analytics', NULL),
+    (4, 'Electronics & Communication', 'ECE', 'VLSI, embedded systems, IoT, and signal processing', NULL)
+ON CONFLICT (id) DO NOTHING;
+
+-- 3. Insert Student Profile
+INSERT INTO public.students (id, user_id, student_id, department_id, year, semester, division, course, cgpa, points, engagement_score, placement_readiness_score, bio, github_url, linkedin_url, portfolio_url, portfolio_slug, is_portfolio_public)
+VALUES (
+    1, 
+    '11111111-1111-1111-1111-111111111111', 
+    'CS2026001', 
+    1, 
+    3, 
+    6, 
+    'A', 
+    'B.Tech in Computer Science', 
+    8.92, 
+    420, 
+    92, 
+    95, 
+    'Full-Stack Developer and Cloud Architecture enthusiast. Experienced with React, TypeScript, PostgreSQL, and scalable microservices.', 
+    'https://github.com/aaravsharma', 
+    'https://linkedin.com/in/aaravsharma', 
+    'http://localhost:5173/p/aarav-sharma', 
+    'aarav-sharma', 
+    TRUE
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- 4. Insert Verified Certificates
+INSERT INTO public.certificates (id, certificate_uid, student_id, title, category, issuer, issue_date, status, verified_by_id, verified_at)
+VALUES 
+    (1, 'CERT-2026-CS88910-VERIFIED', 1, 'Advanced Cloud Architecture & Serverless Design', 'Course', 'Amazon Web Services (AWS)', '2026-01-15', 'APPROVED', '22222222-2222-2222-2222-222222222222', NOW()),
+    (2, 'CERT-2026-HK99420-VERIFIED', 1, 'National Hackathon 2026 — 1st Place Winner', 'Hackathon', 'ACM Student Chapter & IEEE', '2026-02-10', 'APPROVED', '22222222-2222-2222-2222-222222222222', NOW()),
+    (3, 'CERT-2026-PY55210-PENDING', 1, 'Deep Learning Specialization with PyTorch', 'Certification', 'DeepLearning.AI / Coursera', '2026-02-18', 'PENDING', NULL, NULL)
+ON CONFLICT (id) DO NOTHING;
+
+-- 5. Insert Skills
+INSERT INTO public.skills (student_id, name, category, proficiency, is_verified)
+VALUES 
+    (1, 'React', 'Web Development', 'EXPERT', TRUE),
+    (1, 'TypeScript', 'Programming', 'ADVANCED', TRUE),
+    (1, 'PostgreSQL', 'Database', 'ADVANCED', TRUE),
+    (1, 'Python', 'Programming', 'EXPERT', TRUE),
+    (1, 'Docker', 'Cloud', 'INTERMEDIATE', TRUE),
+    (1, 'Tailwind CSS', 'Design', 'EXPERT', TRUE),
+    (1, 'Node.js', 'Web Development', 'ADVANCED', TRUE),
+    (1, 'AWS Cloud', 'Cloud', 'INTERMEDIATE', TRUE)
+ON CONFLICT DO NOTHING;
+
+-- 6. Insert Projects
+INSERT INTO public.projects (student_id, title, description, technologies, github_link, demo_link, faculty_mentor, status)
+VALUES 
+    (1, 'Distributed Real-Time Collaborative Whiteboard', 'Ultra-low latency peer-to-peer visual collaboration suite with conflict-free replicated data types (CRDTs).', 'React, TypeScript, WebRTC, Supabase, Tailwind CSS', 'https://github.com/aaravsharma/collab-board', 'https://collab-board.demo', 'Dr. Rajesh Sharma', 'Completed'),
+    (1, 'AI-Powered Resume & Skill Gap Analyzer', 'Natural Language Processing pipeline that benchmarks student technical competencies against live industry job requisitions.', 'Python, FastAPI, Supabase PostgreSQL, PyTorch', 'https://github.com/aaravsharma/ai-skill-analyzer', 'https://skillgap.demo', 'Dr. Ananya Iyer', 'Completed')
+ON CONFLICT DO NOTHING;
+
+-- 7. Insert Events
+INSERT INTO public.events (id, title, description, category, department_id, organizer_id, venue, start_date, end_date, registration_deadline, max_participants, registered_count, contact_person, contact_email, points_reward, status, qr_active_token, qr_expires_at)
+VALUES 
+    (1, 'National Hackathon 2026: Next-Gen AI & Web3', '36-hour non-stop hackathon with problem statements in decentralized cloud, AI agents, and climate tech.', 'Hackathon', 1, '22222222-2222-2222-2222-222222222222', 'Main Auditorium & Innovation Lab', NOW() + INTERVAL '2 days', NOW() + INTERVAL '4 days', NOW() + INTERVAL '1 day', 250, 180, 'Dr. Rajesh Sharma', 'hackathon@campus.edu', 50, 'PUBLISHED', 'CS-EVT-1-LIVE2026', NOW() + INTERVAL '15 minutes'),
+    (2, 'Masterclass: Cloud Native Architecture with Kubernetes', 'Hands-on workshop exploring microservices deployment, container orchestration, and CI/CD pipelines.', 'Technical Workshop', 1, '22222222-2222-2222-2222-222222222222', 'Seminar Hall 3', NOW() + INTERVAL '5 days', NOW() + INTERVAL '5 days 4 hours', NOW() + INTERVAL '4 days', 100, 75, 'Prof. Sharma', 'events@campus.edu', 30, 'PUBLISHED', 'CS-EVT-2-KUBE88', NOW() + INTERVAL '15 minutes'),
+    (3, 'Tech Leadership & Placement Readiness Summit', 'Keynote talks with engineering leaders from Google, Microsoft, and Amazon on interviewing strategies.', 'Career Fair', 1, '55555555-5555-5555-5555-555555555555', 'Convention Center', NOW() + INTERVAL '8 days', NOW() + INTERVAL '8 days 6 hours', NOW() + INTERVAL '7 days', 400, 310, 'Priya Mehta', 'placement@campus.edu', 40, 'PUBLISHED', 'CS-EVT-3-SUMMIT99', NOW() + INTERVAL '15 minutes')
+ON CONFLICT (id) DO NOTHING;
+
+-- 8. Insert Companies & Jobs
+INSERT INTO public.companies (id, name, website, location)
+VALUES 
+    (1, 'Google India', 'https://careers.google.com', 'Bengaluru / Hybrid'),
+    (2, 'Microsoft India', 'https://careers.microsoft.com', 'Hyderabad / Remote'),
+    (3, 'Amazon India', 'https://amazon.jobs', 'Bengaluru / Pune')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.job_postings (id, company_id, title, job_type, stipend_salary, location, description, required_skills, deadline, min_cgpa, openings, is_active)
+VALUES 
+    (1, 1, 'Software Engineering Intern — Cloud & Systems', 'INTERNSHIP', '₹85,000 / month', 'Bengaluru / Hybrid', 'Join the core Google Cloud infrastructure team to build scalable distributed database tools.', 'React, TypeScript, Python, PostgreSQL, Distributed Systems', NOW() + INTERVAL '20 days', 8.0, 5, TRUE),
+    (2, 2, 'Full-Stack Developer Intern', 'INTERNSHIP', '₹80,000 / month', 'Hyderabad / Remote', 'Develop enterprise-scale web applications for Azure cloud tooling and developer productivity platforms.', 'React, TypeScript, C#, REST APIs, Tailwind CSS', NOW() + INTERVAL '25 days', 7.5, 8, TRUE),
+    (3, 3, 'Graduate Software Development Engineer (SDE-1)', 'FULL_TIME', '₹28 - 36 LPA', 'Bengaluru', 'Build high-throughput customer-facing microservices powering global logistics and prime delivery.', 'Java, Python, Cloud Architecture, SQL, Docker', NOW() + INTERVAL '30 days', 7.8, 12, TRUE)
+ON CONFLICT (id) DO NOTHING;
+
+-- 9. Insert Clubs & Announcements
+INSERT INTO public.clubs (id, name, code, description, department_id, coordinator_id, members_count)
+VALUES 
+    (1, 'Google Developer Student Club (GDSC)', 'GDSC-CSE', 'University chapter dedicated to building open-source projects with modern web, cloud, and mobile technologies.', 1, '66666666-6666-6666-6666-666666666666', 140),
+    (2, 'ACM Student Chapter', 'ACM-CAMPUS', 'Premier computing society organizing coding contests, algorithmic training, and hackathons.', 1, '66666666-6666-6666-6666-666666666666', 95),
+    (3, 'Robotics & AI Innovation Society', 'ROBO-AI', 'Autonomous hardware robotics, computer vision, and ROS-based robotics competitions.', 4, '66666666-6666-6666-6666-666666666666', 60)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.announcements (id, title, content, category, priority, author_id)
+VALUES 
+    (1, 'Upcoming Campus Placement Drive: Tier-1 Technology Cohort', 'Google, Microsoft, and Amazon have announced campus recruitment drives for graduating batches and 3rd-year summer interns. Please ensure your digital portfolios and verified certificates are up-to-date.', 'Placement announcement', 'URGENT', '55555555-5555-5555-5555-555555555555'),
+    (2, 'Dynamic QR Attendance Protocol for Smart Lecture Halls', 'All students and faculty are reminded that workshop and event attendance is now authenticated via real-time time-expiring QR tokens in CampusSphere. Proxies are strictly prohibited.', 'College announcement', 'IMPORTANT', '44444444-4444-4444-4444-444444444444')
+ON CONFLICT (id) DO NOTHING;

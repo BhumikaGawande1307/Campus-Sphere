@@ -1,0 +1,449 @@
+-- ============================================================
+--  CampusSphere — Complete Supabase Database Schema
+--  Run this entire file in Supabase SQL Editor:
+--  Dashboard > SQL Editor > New Query > Paste > Run
+-- ============================================================
+
+-- Extensions
+create extension if not exists "uuid-ossp";
+
+-- ==========================================
+-- 1. ENUMS & CORE TABLES
+-- ==========================================
+
+-- ENUMS
+create type user_role as enum ('STUDENT', 'FACULTY', 'HOD', 'ADMIN', 'PLACEMENT_OFFICER', 'COORDINATOR', 'MENTOR', 'ALUMNI', 'EMPLOYER_VERIFIER');
+create type grievance_status as enum ('OPEN', 'ASSIGNED', 'IN_PROGRESS', 'WAITING_FOR_STUDENT', 'RESOLVED', 'CLOSED', 'REJECTED');
+create type grievance_priority as enum ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL');
+create type event_status as enum ('UPCOMING', 'ONGOING', 'COMPLETED', 'CANCELLED');
+create type scholarship_status as enum ('ACTIVE', 'CLOSED', 'AWARDED');
+create type application_status as enum ('PENDING', 'UNDER_REVIEW', 'APPROVED', 'REJECTED', 'AWARDED');
+
+-- DEPARTMENTS
+create table if not exists public.departments (
+  id serial primary key,
+  name text not null,
+  code text not null unique,
+  description text,
+  hod_id uuid, -- Reference to users added later
+  created_at timestamptz not null default now()
+);
+
+-- USERS (mirrors Supabase auth.users)
+create table if not exists public.users (
+  id uuid primary key references auth.users(id) on delete cascade,
+  email text not null unique,
+  username text not null unique,
+  first_name text not null default '',
+  last_name text not null default '',
+  role user_role not null default 'STUDENT',
+  phone_number text default '',
+  avatar_url text default '',
+  bio text default '',
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.departments add constraint fk_dept_hod foreign key (hod_id) references public.users(id) on delete set null;
+
+-- STUDENTS
+create table if not exists public.students (
+  id serial primary key,
+  user_id uuid not null unique references public.users(id) on delete cascade,
+  student_id text not null unique,
+  department_id int references public.departments(id),
+  course text default 'B.Tech in Computer Science',
+  year int default 1 check (year between 1 and 4),
+  semester int default 1 check (semester between 1 and 8),
+  division text default 'A',
+  cgpa numeric(4,2) default 0,
+  points int default 0,
+  engagement_score int default 50,
+  placement_readiness_score int default 50,
+  github_url text default '',
+  linkedin_url text default '',
+  portfolio_url text default '',
+  portfolio_slug text unique,
+  is_portfolio_public boolean default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- FACULTY
+create table if not exists public.faculty (
+  id serial primary key,
+  user_id uuid not null unique references public.users(id) on delete cascade,
+  faculty_id text not null unique,
+  department_id int references public.departments(id),
+  designation text not null,
+  office_room text,
+  specialization text,
+  joining_date date,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+
+-- ==========================================
+-- 2. ACADEMIC MODULES
+-- ==========================================
+
+-- SUBJECTS
+create table if not exists public.subjects (
+  id serial primary key,
+  code text not null unique,
+  name text not null,
+  department_id int references public.departments(id) on delete cascade,
+  semester int not null check (semester between 1 and 8),
+  credits numeric(3,1) not null default 3.0,
+  type text not null default 'THEORY', -- THEORY, PRACTICAL, LAB
+  is_elective boolean default false,
+  created_at timestamptz not null default now()
+);
+
+-- TIMETABLE
+create table if not exists public.timetable (
+  id serial primary key,
+  department_id int references public.departments(id) on delete cascade,
+  semester int not null,
+  division text not null,
+  day_of_week int not null check (day_of_week between 1 and 7), -- 1 = Monday
+  start_time time not null,
+  end_time time not null,
+  subject_id int references public.subjects(id) on delete cascade,
+  faculty_id uuid references public.users(id) on delete set null,
+  room text not null,
+  type text default 'LECTURE',
+  created_at timestamptz not null default now()
+);
+
+-- ATTENDANCE SESSIONS
+create table if not exists public.attendance_sessions (
+  id uuid primary key default uuid_generate_v4(),
+  subject_id int references public.subjects(id) on delete cascade,
+  faculty_id uuid references public.users(id) on delete set null,
+  department_id int references public.departments(id),
+  semester int not null,
+  division text not null,
+  session_date date not null default current_date,
+  start_time time not null,
+  end_time time not null,
+  topic_covered text,
+  created_at timestamptz not null default now()
+);
+
+-- ATTENDANCE RECORDS
+create table if not exists public.attendance_records (
+  id uuid primary key default uuid_generate_v4(),
+  session_id uuid references public.attendance_sessions(id) on delete cascade,
+  student_id uuid references public.users(id) on delete cascade,
+  status text not null check (status in ('PRESENT', 'ABSENT', 'LATE', 'EXCUSED')),
+  remarks text,
+  created_at timestamptz not null default now(),
+  unique(session_id, student_id)
+);
+
+-- EXAMINATIONS
+create table if not exists public.examinations (
+  id serial primary key,
+  name text not null,
+  type text not null check (type in ('MID_TERM', 'END_TERM', 'UNIT_TEST', 'PRACTICAL')),
+  department_id int references public.departments(id) on delete cascade,
+  semester int not null,
+  academic_year text not null,
+  start_date date,
+  end_date date,
+  is_published boolean default false,
+  created_at timestamptz not null default now()
+);
+
+-- EXAM RESULTS
+create table if not exists public.exam_results (
+  id uuid primary key default uuid_generate_v4(),
+  examination_id int references public.examinations(id) on delete cascade,
+  student_id uuid references public.users(id) on delete cascade,
+  subject_id int references public.subjects(id) on delete cascade,
+  marks_obtained numeric(5,2) not null,
+  max_marks numeric(5,2) not null,
+  grade text,
+  grade_points numeric(3,1),
+  status text not null check (status in ('PASS', 'FAIL', 'ABSENT', 'WITHHELD')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(examination_id, student_id, subject_id)
+);
+
+
+-- ==========================================
+-- 3. EXTRA-CURRICULAR & SUPPORT
+-- ==========================================
+
+-- EVENTS
+create table if not exists public.events (
+  id uuid primary key default uuid_generate_v4(),
+  title text not null,
+  description text not null,
+  category text not null,
+  department_id int references public.departments(id) on delete set null, -- Null for university-wide
+  venue text not null,
+  start_date timestamptz not null,
+  end_date timestamptz not null,
+  registration_deadline timestamptz,
+  capacity int,
+  points int default 0,
+  banner_url text,
+  organizer_id uuid references public.users(id) on delete set null,
+  status event_status not null default 'UPCOMING',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- EVENT REGISTRATIONS
+create table if not exists public.event_registrations (
+  id uuid primary key default uuid_generate_v4(),
+  event_id uuid references public.events(id) on delete cascade,
+  user_id uuid references public.users(id) on delete cascade,
+  status text not null default 'REGISTERED' check (status in ('REGISTERED', 'ATTENDED', 'CANCELLED', 'WAITLISTED')),
+  registered_at timestamptz not null default now(),
+  unique(event_id, user_id)
+);
+
+-- SCHOLARSHIPS
+create table if not exists public.scholarships (
+  id serial primary key,
+  title text not null,
+  provider text not null,
+  description text not null,
+  amount text not null,
+  deadline timestamptz not null,
+  eligibility_criteria text,
+  required_documents text, -- JSON array string or comma separated
+  category text not null,
+  status scholarship_status not null default 'ACTIVE',
+  external_url text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- SCHOLARSHIP APPLICATIONS
+create table if not exists public.scholarship_applications (
+  id uuid primary key default uuid_generate_v4(),
+  scholarship_id int references public.scholarships(id) on delete cascade,
+  user_id uuid references public.users(id) on delete cascade,
+  status application_status not null default 'PENDING',
+  submitted_documents jsonb,
+  applied_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(scholarship_id, user_id)
+);
+
+-- GRIEVANCES / TICKETS
+create table if not exists public.grievances (
+  id uuid primary key default uuid_generate_v4(),
+  ticket_number text not null unique,
+  title text not null,
+  description text not null,
+  category text not null,
+  priority grievance_priority not null default 'MEDIUM',
+  status grievance_status not null default 'OPEN',
+  submitted_by uuid references public.users(id) on delete cascade,
+  assigned_to uuid references public.users(id) on delete set null,
+  department_id int references public.departments(id) on delete set null,
+  attachments jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+
+-- GRIEVANCE COMMENTS
+create table if not exists public.grievance_comments (
+  id serial primary key,
+  grievance_id uuid references public.grievances(id) on delete cascade,
+  user_id uuid references public.users(id) on delete set null,
+  message text not null,
+  attachments jsonb,
+  is_internal boolean default false,
+  created_at timestamptz not null default now()
+);
+
+-- NOTIFICATIONS
+create table if not exists public.notifications (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid references public.users(id) on delete cascade,
+  title text not null,
+  message text not null,
+  type text not null,
+  action_url text,
+  is_read boolean default false,
+  created_at timestamptz not null default now()
+);
+
+-- ANNOUNCEMENTS
+create table if not exists public.announcements (
+  id serial primary key,
+  title text not null,
+  content text not null,
+  department_id int references public.departments(id) on delete set null, -- Null for global
+  target_audience user_role[], -- Null/Empty for everyone
+  author_id uuid references public.users(id) on delete set null,
+  priority text default 'NORMAL',
+  attachments jsonb,
+  valid_until timestamptz,
+  created_at timestamptz not null default now()
+);
+
+
+-- ==========================================
+-- 4. TRIGGERS & FUNCTIONS
+-- ==========================================
+
+-- Updated updated_at trigger function
+create or replace function public.handle_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+-- Apply updated_at triggers
+create trigger on_users_updated before update on public.users for each row execute procedure public.handle_updated_at();
+create trigger on_students_updated before update on public.students for each row execute procedure public.handle_updated_at();
+create trigger on_events_updated before update on public.events for each row execute procedure public.handle_updated_at();
+create trigger on_grievances_updated before update on public.grievances for each row execute procedure public.handle_updated_at();
+
+-- AUTO-CREATE users row on signup trigger
+create or replace function public.handle_new_user()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.users (id, email, username, first_name, last_name, role, is_active)
+  values (
+    new.id, new.email,
+    coalesce(new.raw_user_meta_data->>'username', split_part(new.email,'@',1)),
+    coalesce(new.raw_user_meta_data->>'first_name',''),
+    coalesce(new.raw_user_meta_data->>'last_name',''),
+    cast(coalesce(new.raw_user_meta_data->>'role','STUDENT') as user_role),
+    true
+  ) on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+
+-- ==========================================
+-- 5. ROW LEVEL SECURITY (RLS)
+-- ==========================================
+
+-- Enable RLS on all tables
+alter table public.departments enable row level security;
+alter table public.users enable row level security;
+alter table public.students enable row level security;
+alter table public.faculty enable row level security;
+alter table public.subjects enable row level security;
+alter table public.timetable enable row level security;
+alter table public.attendance_sessions enable row level security;
+alter table public.attendance_records enable row level security;
+alter table public.examinations enable row level security;
+alter table public.exam_results enable row level security;
+alter table public.events enable row level security;
+alter table public.event_registrations enable row level security;
+alter table public.scholarships enable row level security;
+alter table public.scholarship_applications enable row level security;
+alter table public.grievances enable row level security;
+alter table public.grievance_comments enable row level security;
+alter table public.notifications enable row level security;
+alter table public.announcements enable row level security;
+
+-- Global Read Access for Authenticated Users (for structural data)
+create policy "allow_read_departments" on public.departments for select using (auth.role() = 'authenticated');
+create policy "allow_read_subjects" on public.subjects for select using (auth.role() = 'authenticated');
+create policy "allow_read_events" on public.events for select using (auth.role() = 'authenticated');
+create policy "allow_read_scholarships" on public.scholarships for select using (auth.role() = 'authenticated');
+create policy "allow_read_announcements" on public.announcements for select using (auth.role() = 'authenticated');
+create policy "allow_read_timetable" on public.timetable for select using (auth.role() = 'authenticated');
+
+-- Users & Profiles
+create policy "allow_read_users" on public.users for select using (auth.role() = 'authenticated');
+create policy "allow_update_own_user" on public.users for update using (auth.uid() = id);
+
+create policy "allow_read_students" on public.students for select using (auth.role() = 'authenticated');
+create policy "allow_insert_own_student" on public.students for insert with check (auth.uid() = user_id);
+create policy "allow_update_own_student" on public.students for update using (auth.uid() = user_id);
+
+create policy "allow_read_faculty" on public.faculty for select using (auth.role() = 'authenticated');
+create policy "allow_insert_own_faculty" on public.faculty for insert with check (auth.uid() = user_id);
+create policy "allow_update_own_faculty" on public.faculty for update using (auth.uid() = user_id);
+
+-- Attendance (Faculty can manage, Students can view their own)
+create policy "allow_read_attendance_sessions" on public.attendance_sessions for select using (auth.role() = 'authenticated');
+create policy "allow_manage_attendance_sessions" on public.attendance_sessions for all using (auth.uid() in (select id from public.users where role in ('FACULTY', 'ADMIN', 'HOD')));
+
+create policy "allow_read_own_attendance_records" on public.attendance_records for select using (auth.uid() = student_id or auth.uid() in (select id from public.users where role in ('FACULTY', 'ADMIN', 'HOD')));
+create policy "allow_manage_attendance_records" on public.attendance_records for all using (auth.uid() in (select id from public.users where role in ('FACULTY', 'ADMIN', 'HOD')));
+
+-- Exams (Faculty/Admins manage, Students view their own)
+create policy "allow_read_exams" on public.examinations for select using (auth.role() = 'authenticated');
+create policy "allow_manage_exams" on public.examinations for all using (auth.uid() in (select id from public.users where role in ('ADMIN', 'HOD')));
+
+create policy "allow_read_own_exam_results" on public.exam_results for select using (auth.uid() = student_id or auth.uid() in (select id from public.users where role in ('FACULTY', 'ADMIN', 'HOD')));
+create policy "allow_manage_exam_results" on public.exam_results for all using (auth.uid() in (select id from public.users where role in ('FACULTY', 'ADMIN', 'HOD')));
+
+-- Events
+create policy "allow_insert_own_event_reg" on public.event_registrations for insert with check (auth.uid() = user_id);
+create policy "allow_read_own_event_reg" on public.event_registrations for select using (auth.uid() = user_id or auth.uid() in (select id from public.users where role in ('ADMIN', 'COORDINATOR')));
+
+-- Scholarships
+create policy "allow_insert_own_schol_app" on public.scholarship_applications for insert with check (auth.uid() = user_id);
+create policy "allow_read_own_schol_app" on public.scholarship_applications for select using (auth.uid() = user_id or auth.uid() in (select id from public.users where role in ('ADMIN')));
+
+-- Grievances
+create policy "allow_insert_own_grievance" on public.grievances for insert with check (auth.uid() = submitted_by);
+create policy "allow_read_own_grievance" on public.grievances for select using (auth.uid() = submitted_by or auth.uid() = assigned_to or auth.uid() in (select id from public.users where role in ('ADMIN', 'COORDINATOR')));
+create policy "allow_update_own_grievance" on public.grievances for update using (auth.uid() = submitted_by or auth.uid() = assigned_to or auth.uid() in (select id from public.users where role in ('ADMIN', 'COORDINATOR')));
+
+create policy "allow_insert_grievance_comment" on public.grievance_comments for insert with check (auth.uid() = user_id);
+create policy "allow_read_grievance_comments" on public.grievance_comments for select using (
+  auth.uid() in (select submitted_by from public.grievances where id = grievance_id) or
+  auth.uid() in (select assigned_to from public.grievances where id = grievance_id) or
+  auth.uid() in (select id from public.users where role in ('ADMIN', 'COORDINATOR'))
+);
+
+-- Notifications
+create policy "allow_read_own_notifications" on public.notifications for select using (auth.uid() = user_id);
+create policy "allow_update_own_notifications" on public.notifications for update using (auth.uid() = user_id);
+
+
+-- ==========================================
+-- 6. SEED DATA
+-- ==========================================
+
+insert into public.departments (name, code, description) values
+  ('Computer Science & Engineering', 'CSE', 'Department of Computer Science'),
+  ('Information Technology & Data Science', 'ITDS', 'Department of IT & Data Science'),
+  ('Electronics & Communication', 'ECE', 'Department of Electronics'),
+  ('Mechanical Engineering', 'MECH', 'Department of Mechanical Engineering'),
+  ('Civil Engineering', 'CIVIL', 'Department of Civil Engineering')
+on conflict (code) do nothing;
+
+insert into public.subjects (code, name, department_id, semester, credits) values
+  ('CS101', 'Introduction to Programming', 1, 1, 4.0),
+  ('CS201', 'Data Structures', 1, 3, 4.0),
+  ('CS301', 'Operating Systems', 1, 5, 3.0),
+  ('EC101', 'Basic Electronics', 3, 1, 3.0)
+on conflict (code) do nothing;
+
+-- Demo Scholarship
+insert into public.scholarships (title, provider, description, amount, deadline, category, external_url) values
+  ('Merit Cum Means Scholarship', 'State Government', 'For meritorious students from economically weaker sections.', '₹50,000/year', now() + interval '30 days', 'GOVERNMENT', 'https://scholarships.gov.in')
+on conflict do nothing;
+
+-- Demo Event
+insert into public.events (title, description, category, venue, start_date, end_date, capacity, status) values
+  ('TechNova 2026', 'Annual Technology Symposium featuring hackathons, guest lectures, and coding challenges.', 'FEST', 'Main Auditorium', now() + interval '7 days', now() + interval '9 days', 500, 'UPCOMING')
+on conflict do nothing;
